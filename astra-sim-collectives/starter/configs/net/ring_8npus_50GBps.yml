@@ -1,0 +1,5 @@
+# Ring topology: each NPU is linked to its two neighbors; every other NPU is reached hop by hop.
+topology: [ Ring ]
+npus_count: [ 8 ]
+bandwidth: [ 50.0 ]   # GB/s per link
+latency: [ 500.0 ]    # ns per hop

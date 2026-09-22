@@ -1,0 +1,2 @@
+interface GigabitEthernet2/0
+ ip access-group RESTRICT_HOST_TRAFFIC_IN out
