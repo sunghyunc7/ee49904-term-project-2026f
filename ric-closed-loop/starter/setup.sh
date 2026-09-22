@@ -42,10 +42,57 @@ fi
 say "Build dependencies"
 command -v apt-get >/dev/null || die "This is not an apt-based distribution. See the manual list in the README."
 SUDO=""; [ "$(id -u)" != "0" ] && SUDO="sudo"
-$SUDO apt-get update -qq
-$SUDO apt-get install -y -qq \
-    git cmake make gcc g++ pkg-config swig python3 python3-dev python3-venv \
-    libsctp-dev bison flex libtool autoconf
+APT_PACKAGES="git cmake make gcc g++ pkg-config swig python3 python3-dev python3-venv libsctp-dev bison flex libtool autoconf"
+
+# apt is called only when something is missing. It takes a system-wide lock, and on a freshly installed
+# Ubuntu (WSL2 or a VM) the automatic updates usually hold that lock for the first minutes after boot.
+# An unconditional apt-get here made every re-run of setup.sh depend on nobody else using apt at that
+# moment — measured 2026-09-22: setup died after 1 s with "Could not get lock", exit code 100.
+MISSING=""
+for p in $APT_PACKAGES; do
+  [ "$(dpkg-query -W -f='${db:Status-Status}' "$p" 2>/dev/null)" = "installed" ] || MISSING="$MISSING $p"
+done
+
+# apt-get that waits (up to 10 min) when another apt or dpkg holds the lock, instead of dying.
+# apt's own DPkg::Lock::Timeout does not cover the package-list lock that 'apt-get update' takes
+# (checked on apt 2.8.3, Ubuntu 24.04), so the waiting is done here. No pipes: see lesson on SIGPIPE.
+apt_wait(){
+  local deadline=$(( $(date +%s) + 600 )) out rc who pid n=0
+  while :; do
+    if out=$($SUDO apt-get "$@" 2>&1); then
+      [ -z "$out" ] || printf '%s\n' "$out"
+      return 0
+    else
+      rc=$?
+    fi
+    if [[ $out != *"Could not get lock"* ]]; then
+      printf '%s\n' "$out" >&2
+      return "$rc"
+    fi
+    who="another process"; pid=""
+    if [[ $out =~ held\ by\ process\ ([0-9]+)\ \(([^\)]*)\) ]]; then
+      pid="${BASH_REMATCH[1]}"; who="${BASH_REMATCH[2]}, pid $pid"
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      die "apt is still locked by $who after 10 minutes.
+       Another package manager is running. On a freshly booted Ubuntu this is usually the automatic
+       updates, which finish on their own — let it finish, then run setup.sh again.
+       To see what it is:  ps -o pid,etime,cmd -p ${pid:-<pid>}"
+    fi
+    [ $(( n % 4 )) -eq 0 ] && echo "  apt is busy ($who) — waiting for it to finish (up to 10 min), then retrying"
+    n=$(( n + 1 ))
+    sleep 15
+  done
+}
+
+if [ -z "$MISSING" ]; then
+  echo "  all build dependencies are already installed — apt not needed"
+else
+  echo "  installing:$MISSING"
+  apt_wait update -qq || die "apt-get update failed (output above)."
+  # shellcheck disable=SC2086  # MISSING is a word list on purpose
+  apt_wait install -y -qq $MISSING || die "apt-get install failed (output above)."
+fi
 [ -f /usr/include/netinet/sctp.h ] || die "netinet/sctp.h is missing — libsctp-dev failed to install"
 echo "  cmake $(cmake --version | awk 'NR==1{print $3}') / swig $(swig -version | awk '/SWIG Version/{print $3}')"
 
