@@ -49,7 +49,11 @@ APT_PACKAGES="build-essential cmake ninja-build git python3 python3-pip python3-
 deps_ok() {
   for t in cmake git protoc python3; do command -v "$t" >/dev/null 2>&1 || return 1; done
   command -v c++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1 || return 1
-  python3 -c "import venv" >/dev/null 2>&1 || return 1
+  # ensurepip, not venv: on Debian and Ubuntu the venv module ships in the base Python package
+  # (libpython3.x-stdlib) while ensurepip is what the separate python3-venv package adds. Checking
+  # "import venv" therefore passes on a machine that has no python3-venv, the install is skipped,
+  # and `python3 -m venv` fails later with "ensurepip is not available". Do not change this back.
+  python3 -c "import ensurepip" >/dev/null 2>&1 || return 1
   # libprotobuf-dev installs headers and no command of its own, and their path differs between
   # distributions. Rather than guess at one, ask the compiler — it cannot be wrong about this.
   if [ "$UNAME" = "Linux" ]; then
@@ -85,8 +89,10 @@ else
   brew list protobuf   >/dev/null 2>&1 || brew install protobuf
 fi
 deps_ok || die "a dependency is still missing after the install step.
-       Needed: a C++17 compiler, cmake, git, protoc, the protobuf headers, python3 with venv.
-       On Debian or Ubuntu: $APT_PACKAGES"
+       Needed: a C++17 compiler, cmake, git, protoc, the protobuf headers, and a python3 whose
+       venv can create environments with pip (that is ensurepip, not just the venv module).
+       Debian or Ubuntu:  $APT_PACKAGES
+       macOS:             brew install cmake ninja protobuf python"
 echo "  cmake $(cmake --version | head -1 | awk '{print $3}') / protoc $(protoc --version | awk '{print $2}')"
 
 # ---------- 2. Source ----------
@@ -170,7 +176,24 @@ if [ -d "$ROOT/.venv" ]; then
     rm -rf "$ROOT/.venv"
   fi
 fi
-[ -d "$ROOT/.venv" ] || "$PYBIN" -m venv "$ROOT/.venv"
+# An environment without pip is worse than none: `python3 -m venv` leaves bin/python behind even
+# when ensurepip was missing, so a student who then installs python3-venv and re-runs setup.sh hits
+# "bin/pip: No such file or directory" and is stuck until they delete the folder by hand. Rebuild it.
+if [ -d "$ROOT/.venv" ] && [ ! -x "$ROOT/.venv/bin/pip" ]; then
+  echo "  the existing virtual environment has no pip — recreating it"
+  rm -rf "$ROOT/.venv"
+fi
+if [ ! -d "$ROOT/.venv" ]; then
+  "$PYBIN" -m venv "$ROOT/.venv" || { rm -rf "$ROOT/.venv"; die "could not create the virtual environment with $PYBIN.
+       On Ubuntu and WSL2 this is almost always the missing ensurepip:
+         sudo apt install python3-venv
+       Then run setup.sh again."; }
+fi
+# Whichever route we arrived by, leave nothing half-made behind.
+[ -x "$ROOT/.venv/bin/pip" ] || { rm -rf "$ROOT/.venv"; die "the virtual environment was created without pip, so it has been removed.
+       Install ensurepip and run setup.sh again:
+         Ubuntu or WSL2:  sudo apt install python3-venv  (or python$("$PYBIN" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)-venv)
+         macOS:           brew install python"; }
 "$ROOT/.venv/bin/pip" install -q --upgrade pip
 "$ROOT/.venv/bin/pip" install -q --upgrade protobuf
 echo "  $("$ROOT/.venv/bin/python" -V 2>&1) / $("$ROOT/.venv/bin/python" -c 'import google.protobuf as p; print("protobuf", p.__version__)')"

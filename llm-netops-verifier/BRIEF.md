@@ -77,11 +77,17 @@ verified end to end.
 
 ```bash
 ssh <your-account>@<the server you were assigned>
-cd starter/
+git clone <the course repository link from the LMS>
+cd ee49904-term-project-2026f/llm-netops-verifier/starter
 bash setup.sh                      # venv + pybatfish + Batfish under udocker  (5–10 min, once)
 source ~/ee49904-netops/env.sh     # every new shell
 bash smoke_test.sh                 # 9 checks — all must pass
 ```
+
+Clone it on the server, not on your laptop: everything you run lives there. The kit is the whole
+`llm-netops-verifier/starter/` directory, and every command in this brief is run from inside it.
+If the kit is fixed during the term, `git pull` in the repository brings the fix; your own files
+stay in `runs/`, which the repository ignores.
 
 Both halves of the loop live on that machine: the model is served locally and Batfish runs in
 your own account under **udocker**, which needs neither a daemon nor root. There is no tunnel.
@@ -351,6 +357,7 @@ The **model weights** are not covered by the licenses above, and the two are not
 
 | Rev | Date | What changed |
 |---|---|---|
+| **r11** | 2026-09-23 | **Four fixes from the first run by someone other than the course staff** (a TA, on the shared server, from the published repository). Kit only except for §2. **§2** now shows the `git clone` and the path into the kit, and says to clone on the server (the repository link is on the LMS). **`setup.sh`** checks for `pycurl` even when `udocker` is already installed — on an account that had it, the image pull failed with "need curl or pycurl" and setup stopped there. **`loop.py`** wraps the loop in `try`/`finally`: on any failure the model server can produce — a timeout, an HTTP error — the run log is still written and the verifier's snapshots are still deleted. Both are yours to lose: the log is the only record of what that run did, and snapshots that are never removed accumulate in the verifier you go on using. This brief asks you to run settings that fail on purpose, so it is not a rare path. **`run_loop.py`** names the accepted configuration after the run log (`--out`) rather than after the intent, so two runs side by side — what Q1 asks for — no longer overwrite each other's result. Also, the smoke test now counts the untouched network's findings the way `run_loop.py` does, so the two no longer print different numbers for the same thing. No requirement, question or measurement changed. |
 | **r10** | 2026-09-21 | **Q1** opens with one sentence: say first whether this loop is one of the four wireless control problems or none of them, and if none, name the analog you would defend and the loop the work actually closes. **Q3**'s closing sentence now says that Gap 4 is where this brief lives and that the marks are for the boundary, the numbers and the evidence, not for naming the gap; arguing for another gap is still allowed. No requirement, command or number changed. |
 | **r9** | 2026-09-21 | **§7 only, license accuracy.** The two models were named on one line as carrying "its own terms", which flattened a real difference: gpt-oss is Apache-2.0 down to the weights, while Gemma is not an OSI open-source license at all but Google's own Terms of Use with a Prohibited Use Policy that follows the model. Q2.4 and extension B have you compare the two, so the distinction is one you meet in the work. No requirement, command or number changed. |
 | **r8** | 2026-09-20 | **One place to run this.** The laptop-with-Docker route (r2's path B) is gone: §2, §5, §6 and §7 now describe the shared server only. It was a second environment to support for no gain — the model has to come from the server in either case, and the course verified the server path end to end. Teams without an account yet can still run the offline checks (`python3 -m netops.selftest`). **§4 extension A** also gains one sentence: as shipped, most runs are accepted at the first attempt, so the first job is to find a setting in which the loop iterates at all — measured across models, intents and seeds, a second iteration is rare, and without this the extension asks you to compare feedback formats that are never used. The three required questions are unchanged from r7. |

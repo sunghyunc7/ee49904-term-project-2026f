@@ -118,12 +118,16 @@ elif ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   if ! command -v udocker >/dev/null 2>&1; then
     python3 -m pip install --quiet udocker >/dev/null 2>&1 \
       || die "pip install udocker failed. Check your network and try again."
-    # udocker pulls over HTTP through either the curl binary or pycurl. The shared servers
-    # ship wget only, so pycurl has to stand in for the missing curl.
-    if ! command -v curl >/dev/null 2>&1; then
-      python3 -m pip install --quiet pycurl >/dev/null 2>&1 \
-        || warn "neither curl nor pycurl is available — the pull below will probably fail."
-    fi
+  fi
+  # udocker pulls over HTTP through either the curl binary or pycurl, and the shared servers ship
+  # wget only — so pycurl has to stand in. This check sits outside the install above on purpose:
+  # an account that already had udocker needs pycurl just as much, and the pull fails with
+  # "need curl or pycurl" if it is missing. Ask the interpreter, not the shell: pycurl is a module.
+  if ! command -v curl >/dev/null 2>&1 && ! python3 -c "import pycurl" >/dev/null 2>&1; then
+    echo "  no curl and no pycurl — installing pycurl (udocker pulls with it)"
+    python3 -m pip install --quiet pycurl >/dev/null 2>&1
+    python3 -c "import pycurl" >/dev/null 2>&1 \
+      || warn "neither curl nor pycurl is available — the pull below will probably fail."
   fi
   command -v udocker >/dev/null 2>&1 \
     || die "udocker installed but is not on PATH. Re-source $ROOT/env.sh and try again."

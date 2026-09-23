@@ -114,100 +114,117 @@ NUM_PREDICT = 4096
 
 def run(intent, verifier, llm, base_cfg, device="as2dept1", max_iters=4,
         proposal_lines=None, verbose=True, out_json=None, num_predict=NUM_PREDICT):
-    """One experiment. Returns (RunLog payload, accepted_cfg_or_None)."""
+    """One experiment. Returns (RunLog payload, accepted_cfg_or_None).
+
+    Whatever happens inside — a timeout talking to the model, an HTTP error from the server, a
+    Ctrl-C — the run log is written and the verifier's snapshots are deleted before the exception
+    leaves this function. Both matter to you directly: the log is the only record of what the run
+    did, and snapshots that are never removed pile up in the verifier you keep using."""
     log = RunLog(intent, llm.model if llm else "(scripted)", "scripted" if proposal_lines else "llm")
     t_start = time.time()
     cfg = base_cfg
     accepted = None
     findings = []
 
-    for i in range(1, max_iters + 1):
-        t0 = time.time()
-        # ---- propose -------------------------------------------------------
-        if proposal_lines is not None:
-            lines, meta = list(proposal_lines), {"scripted": True}
-            proposal_lines = None       # scripted mode gets exactly one shot
-            if i > 1:
-                break
-        else:
-            prompt = (propose_prompt(intent, device, cfg) if i == 1
-                      else repair_prompt(intent, device, cfg, findings))
-            try:
-                text, meta = llm.complete(prompt, system=SYSTEM, num_predict=num_predict,
-                                          tag=f"{intent.key}/iter{i}")
-            except (BudgetExceeded, ReplayMiss) as e:
-                log.outcome = f"stopped: {type(e).__name__}"
-                if verbose:
-                    print(f"  iter {i}: {e}")
-                break
-            lines = extract_config_lines(text)
+    try:
+        for i in range(1, max_iters + 1):
+            t0 = time.time()
+            # ---- propose -------------------------------------------------------
+            if proposal_lines is not None:
+                lines, meta = list(proposal_lines), {"scripted": True}
+                proposal_lines = None       # scripted mode gets exactly one shot
+                if i > 1:
+                    break
+            else:
+                prompt = (propose_prompt(intent, device, cfg) if i == 1
+                          else repair_prompt(intent, device, cfg, findings))
+                try:
+                    text, meta = llm.complete(prompt, system=SYSTEM, num_predict=num_predict,
+                                              tag=f"{intent.key}/iter{i}")
+                except (BudgetExceeded, ReplayMiss) as e:
+                    log.outcome = f"stopped: {type(e).__name__}"
+                    if verbose:
+                        print(f"  iter {i}: {e}")
+                    break
+                lines = extract_config_lines(text)
 
-            if meta.get("done_reason") == "length":
-                # The answer ends where the allowance ended, not where the model would have. Its
-                # last line is usually cut mid-word, and a cut line is not the model's proposal:
-                # applied, it makes the verifier report defects the model never wrote (half an
-                # ACL line replaces the ACL body and derails the parser for the rest of the file —
-                # measured: a truncated answer came back as "2 undefined route-maps"). So a
-                # truncated answer is recorded and NOT applied. Asking again at temperature 0
-                # would spend the same allowance the same way, so the loop stops.
-                if lines:
-                    why = (f"answer truncated at the token limit (num_predict={num_predict}) after "
-                           f"{len(lines)} configuration line(s) — not applied. Last line: "
-                           f"{lines[-1].strip()[:60]!r}. Raise --num-predict.")
-                else:
-                    why = (f"answer truncated at the token limit (num_predict={num_predict}) before "
-                           f"any configuration appeared ({meta.get('thinking_chars', 0)} characters "
-                           "of reasoning came first). Raise --num-predict.")
-                log.add(iter=i, error=why, proposed_lines=lines, meta=meta)
-                log.outcome = "stopped: answer truncated"
+                if meta.get("done_reason") == "length":
+                    # The answer ends where the allowance ended, not where the model would have. Its
+                    # last line is usually cut mid-word, and a cut line is not the model's proposal:
+                    # applied, it makes the verifier report defects the model never wrote (half an
+                    # ACL line replaces the ACL body and derails the parser for the rest of the file —
+                    # measured: a truncated answer came back as "2 undefined route-maps"). So a
+                    # truncated answer is recorded and NOT applied. Asking again at temperature 0
+                    # would spend the same allowance the same way, so the loop stops.
+                    if lines:
+                        why = (f"answer truncated at the token limit (num_predict={num_predict}) after "
+                               f"{len(lines)} configuration line(s) — not applied. Last line: "
+                               f"{lines[-1].strip()[:60]!r}. Raise --num-predict.")
+                    else:
+                        why = (f"answer truncated at the token limit (num_predict={num_predict}) before "
+                               f"any configuration appeared ({meta.get('thinking_chars', 0)} characters "
+                               "of reasoning came first). Raise --num-predict.")
+                    log.add(iter=i, error=why, proposed_lines=lines, meta=meta)
+                    log.outcome = "stopped: answer truncated"
+                    if verbose:
+                        print(f"  iter {i}: {why}")
+                    break
+
+            if not lines:
+                why = "model produced no configuration lines"
+                log.add(iter=i, error=why, meta=meta)
+                log.outcome = "stopped: empty proposal"
                 if verbose:
                     print(f"  iter {i}: {why}")
                 break
 
-        if not lines:
-            why = "model produced no configuration lines"
-            log.add(iter=i, error=why, meta=meta)
-            log.outcome = "stopped: empty proposal"
+            # ---- apply ---------------------------------------------------------
+            candidate, report = apply_edits(cfg, lines)
+            if candidate == cfg:
+                # Same keys as an applied iteration (`proposed_lines`, `apply_report`), so that a count
+                # of `unapplied` lines over a set of run logs does not skip the runs where the merge
+                # refused everything — which are exactly the runs in which it matters most.
+                log.add(iter=i, error="proposal changed nothing", proposed_lines=lines,
+                        apply_report=report, meta=meta)
+                log.outcome = "stopped: proposal changed nothing"
+                if verbose:
+                    print(f"  iter {i}: the proposal did not change the configuration")
+                break
+
+            # ---- verify --------------------------------------------------------
+            res = verifier.verify(candidate, name=f"cand-{intent.key}-{i}", intent=intent, node=device)
+            findings = res.findings
+            log.add(iter=i, proposed_lines=lines, apply_report=report,
+                    diff=unified_diff(cfg, candidate, f"{device}.cfg"),
+                    result=res.as_dict(), meta=meta, iter_s=round(time.time() - t0, 1))
+
             if verbose:
-                print(f"  iter {i}: {why}")
-            break
+                print(f"  iter {i}: {res.summary()}   "
+                      f"({meta.get('output_tokens', 0)} tok, {round(time.time() - t0, 1)}s)")
+                for f in res.blocking[:5]:
+                    print(f"        {f}")
 
-        # ---- apply ---------------------------------------------------------
-        candidate, report = apply_edits(cfg, lines)
-        if candidate == cfg:
-            # Same keys as an applied iteration (`proposed_lines`, `apply_report`), so that a count
-            # of `unapplied` lines over a set of run logs does not skip the runs where the merge
-            # refused everything — which are exactly the runs in which it matters most.
-            log.add(iter=i, error="proposal changed nothing", proposed_lines=lines,
-                    apply_report=report, meta=meta)
-            log.outcome = "stopped: proposal changed nothing"
-            if verbose:
-                print(f"  iter {i}: the proposal did not change the configuration")
-            break
+            if res.accepted:
+                accepted = candidate
+                log.outcome = f"accepted at iteration {i}"
+                break
+            cfg = candidate     # repair from the rejected candidate, not from scratch
+        else:
+            log.outcome = f"not accepted within {max_iters} iterations"
 
-        # ---- verify --------------------------------------------------------
-        res = verifier.verify(candidate, name=f"cand-{intent.key}-{i}", intent=intent, node=device)
-        findings = res.findings
-        log.add(iter=i, proposed_lines=lines, apply_report=report,
-                diff=unified_diff(cfg, candidate, f"{device}.cfg"),
-                result=res.as_dict(), meta=meta, iter_s=round(time.time() - t0, 1))
-
-        if verbose:
-            print(f"  iter {i}: {res.summary()}   "
-                  f"({meta.get('output_tokens', 0)} tok, {round(time.time() - t0, 1)}s)")
-            for f in res.blocking[:5]:
-                print(f"        {f}")
-
-        if res.accepted:
-            accepted = candidate
-            log.outcome = f"accepted at iteration {i}"
-            break
-        cfg = candidate     # repair from the rejected candidate, not from scratch
-    else:
-        log.outcome = f"not accepted within {max_iters} iterations"
-
-    if log.outcome == "not run":
-        log.outcome = log.outcome if accepted else (log.outcome or "stopped")
-    log.wall_s = time.time() - t_start
-    payload = log.finish(llm.budget if llm else None, out_json)
+        if log.outcome == "not run":
+            log.outcome = log.outcome if accepted else (log.outcome or "stopped")
+    except BaseException as e:                                      # noqa: BLE001
+        # Anything the two handled cases above do not cover: a socket timeout, an HTTP 500 from
+        # the model server, a bug in your own code, Ctrl-C. Record why the run ended, then let it
+        # through — the finally block below still writes the log and frees the snapshots.
+        log.outcome = f"stopped: {type(e).__name__}: {e}"[:300]
+        raise
+    finally:
+        log.wall_s = time.time() - t_start
+        try:
+            verifier.close()          # snapshots first: they are the shared resource
+        except Exception:             # noqa: BLE001
+            pass
+        payload = log.finish(llm.budget if llm else None, out_json)
     return payload, accepted

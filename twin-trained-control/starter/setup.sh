@@ -33,10 +33,17 @@ if [ "$UNAME" = "Linux" ]; then
   echo "  cores $(nproc) / RAM $(free -g | awk '/^Mem:/{print $2}')GB / free disk $(df -h "$HOME" | awk 'NR==2{print $4}')"
   grep -qi microsoft /proc/version 2>/dev/null && echo "  WSL2 environment."
   command -v python3 >/dev/null || die "python3 not found: sudo apt install python3 python3-venv"
-  python3 -c "import venv" 2>/dev/null || {
+  # Ask for ensurepip, not venv: venv is in the stdlib and always imports, while Debian and Ubuntu
+  # ship only ensurepip in python3.x-venv. Testing "import venv" therefore always passed, and the
+  # missing package surfaced later as "ensurepip is not available" from `python3 -m venv`, leaving a
+  # venv without pip behind (measured by a TA on a fresh WSL Ubuntu-24.04, 2026-09-22).
+  python3 -c "import ensurepip" 2>/dev/null || {
     SUDO=""; [ "$(id -u)" != "0" ] && SUDO="sudo"
-    say "Installing python3-venv"; $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq python3-venv python3-pip
+    say "Installing python3-venv"
+    # Keep going when apt cannot run (no root, no network): the venv step below reports what to do.
+    $SUDO apt-get update -qq || true
+    $SUDO apt-get install -y -qq python3-venv python3-pip \
+      || echo "  ! apt could not install it here — if the next step fails, follow the message it prints."
   }
 else
   echo "  macOS $(sw_vers -productVersion 2>/dev/null) / cores $(sysctl -n hw.ncpu)"
@@ -87,18 +94,34 @@ else
 fi
 
 # ---------- 1. Virtual environment ----------
+# A failed creation must not leave a venv behind: the next run would find the directory, reuse it,
+# and fail on the missing pip instead of reporting the real cause.
+make_venv(){
+  "$PYBIN" -m venv "$VENV" && [ -x "$VENV/bin/pip" ] && return 0
+  rm -rf "$VENV"
+  PV=$("$PYBIN" -c 'import sys;print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 3)
+  die "Could not create the virtual environment (usually a missing ensurepip).
+       Ubuntu/Debian:  sudo apt install python$PV-venv    ·  macOS:  brew install python@$PV
+       Install it, then run this script again."
+}
+
 say "Virtual environment → $VENV"
 if [ -d "$VENV" ]; then
   # Reusing an existing venv built with an old Python would make the check above meaningless.
   EXV=$("$VENV/bin/python" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
   NEWV=$("$PYBIN" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])')
-  if [ "$EXV" -lt 310 ] || { [ "$EXV" -lt 311 ] && [ "$NEWV" -ge 311 ]; }; then
+  if [ ! -x "$VENV/bin/pip" ]; then
+    # An ensurepip-less or interrupted creation leaves a venv with no pip, and every later step fails.
+    echo "  Existing venv has no pip — rebuilding it"
+    rm -rf "$VENV"
+    make_venv
+  elif [ "$EXV" -lt 310 ] || { [ "$EXV" -lt 311 ] && [ "$NEWV" -ge 311 ]; }; then
     echo "  Existing venv was built with Python $((EXV/100)).$((EXV%100)) — rebuilding it"
     rm -rf "$VENV"
-    "$PYBIN" -m venv "$VENV"
+    make_venv
   fi
 else
-  "$PYBIN" -m venv "$VENV"
+  make_venv
 fi
 PY="$VENV/bin/python"; PIP="$VENV/bin/pip"
 "$PIP" install -q --upgrade pip

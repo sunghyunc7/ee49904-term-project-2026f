@@ -112,9 +112,20 @@ def main():
 
     out = a.out or os.path.join("runs", f"{intent.key}-{(a.model if llm else 'scripted')}.json")
     print()
-    payload, accepted = run(intent, v, llm, base_cfg, device=a.device,
-                            max_iters=a.max_iters, proposal_lines=proposal_lines,
-                            out_json=out, num_predict=a.num_predict)
+    try:
+        payload, accepted = run(intent, v, llm, base_cfg, device=a.device,
+                                max_iters=a.max_iters, proposal_lines=proposal_lines,
+                                out_json=out, num_predict=a.num_predict)
+    except KeyboardInterrupt:
+        # run() has already written the log and removed its snapshots; say so rather than
+        # printing a traceback at someone who pressed Ctrl-C on purpose.
+        print(f"\n!! interrupted. The run log up to that point is in {out}.")
+        return 130
+    except Exception as e:                                          # noqa: BLE001
+        print(f"\n!! the run stopped: {type(e).__name__}: {e}")
+        print(f"   The run log is in {out} and the verifier's snapshots were removed.")
+        print("   If this came from the model server, check that it is up before running again.")
+        return 3
 
     print(f"\noutcome  {payload['outcome']}")
     if payload.get("budget"):
@@ -124,8 +135,12 @@ def main():
     print(f"log      {out}")
 
     if accepted:
+        # Named after the run log, not after the intent: two runs of the same intent side by side
+        # (what Q1 asks you to do) would otherwise write the same file and one would lose its
+        # result. --out names the run; this follows it.
         acc_path = os.path.join(os.path.dirname(out) or ".",
-                                f"{intent.key}-accepted-{a.device}.cfg")
+                                f"{os.path.splitext(os.path.basename(out))[0]}"
+                                f"-accepted-{a.device}.cfg")
         with open(acc_path, "w", encoding="utf-8") as f:
             f.write(accepted)
         print(f"config   {acc_path}")

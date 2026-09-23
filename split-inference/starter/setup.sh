@@ -26,8 +26,10 @@ if [ "$UNAME" = "Linux" ]; then
   echo "  cores $CORES / RAM ${MEMGB}GB / free disk $(df -h "$HOME" | awk 'NR==2{print $4}')"
   grep -qi microsoft /proc/version 2>/dev/null && echo "  WSL2 environment."
   command -v python3 >/dev/null || die "python3 not found: sudo apt install python3 python3-venv"
-  python3 -c "import venv" 2>/dev/null || {
-    say "Installing python3-venv"
+  # Test ensurepip, not venv: on Debian/Ubuntu venv is in the stdlib but ensurepip ships in
+  # python3.x-venv, so `import venv` passes without it and the virtualenv is then built with no pip.
+  python3 -c "import ensurepip" 2>/dev/null || {
+    say "Installing python3-venv (ensurepip is missing)"
     SUDO=""; [ "$(id -u)" != "0" ] && SUDO="sudo"
     $SUDO apt-get update -qq && $SUDO apt-get install -y -qq python3-venv python3-pip
   }
@@ -39,8 +41,16 @@ echo "  python $(python3 -c 'import sys;print(".".join(map(str,sys.version_info[
 
 # ---------- 1. Virtualenv ----------
 say "Virtualenv → $VENV"
+# A virtualenv built without ensurepip has no bin/pip and every later step fails on it, so discard it.
+if [ -n "$VENV" ] && [ -d "$VENV" ] && [ ! -x "$VENV/bin/pip" ]; then
+  # pyvenv.cfg is what makes it a virtualenv — never delete a folder that is something else.
+  [ -f "$VENV/pyvenv.cfg" ] || die "$VENV already exists and is not a virtualenv. Point SPLIT_VENV at a new path."
+  echo "  ! $VENV exists but has no pip — removing it and creating it again."
+  rm -rf "$VENV"
+fi
 [ -d "$VENV" ] || python3 -m venv "$VENV"
 PY="$VENV/bin/python"; PIP="$VENV/bin/pip"
+[ -x "$PIP" ] || die "the virtualenv has no pip. Install python3-venv (sudo apt install python3-venv) and run this script again."
 "$PIP" install -q --upgrade pip
 
 # ---------- 2. PyTorch (CPU-only) ----------

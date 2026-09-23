@@ -67,14 +67,17 @@ def phase_reference():
     t0 = time.time()
     info = v.init_reference()
     pre = v.reference_findings()
-    blocking = [f for f in pre if f.severity == "blocking"]
+    # Count distinct signatures, which is what init_reference() subtracts and what run_loop.py
+    # prints — two findings can describe the same defect and would otherwise be counted twice.
+    uniq = {f.signature() for f in pre}
+    blocking = {f.signature() for f in pre if f.severity == "blocking"}
     parse_errors = [f for f in pre if f.check == "parse" and f.severity == "blocking"]
     v.close()
     if parse_errors:
         return result(False, "the base snapshot does not parse cleanly: "
                              + "; ".join(str(f) for f in parse_errors[:3]))
     return result(True, f"13 devices parsed in {info['init_s']}s; the untouched network already "
-                        f"has {len(pre)} findings ({len(blocking)} of them blocking) — these are "
+                        f"has {len(uniq)} findings ({len(blocking)} of them blocking) — these are "
                         f"subtracted from yours")
 
 
