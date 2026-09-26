@@ -32,7 +32,9 @@ build the loop where the deciding is done by a formal verifier:
 Batfish reads configuration files and computes what the network *would* do: which flows would be
 delivered, which ACL lines can ever match, which BGP sessions would come up, which references
 point at nothing. It sends no packets and touches no device. It is, in this project, the
-acceptance test — the thing standing between a plausible answer and a production network.
+acceptance test *of a change* — the thing standing between a plausible answer and a production
+network. In the lectures' terms, Batfish is a *checker*, one kind of verifier, and this loop is a
+pre-check: it ends before anything reaches a live network, so there is no canary stage.
 
 You will find that the loop closes, that it converges on some tasks and not others, and — this is
 the part worth writing down — that it can converge on a configuration which passes every check and
@@ -182,7 +184,9 @@ with measurements:
 ### Q2 — What did the verifier actually verify, and what did it not?
 > *Course tool: the acceptance test.*
 
-Batfish is the acceptance test, so audit the acceptance test.
+Batfish is the acceptance test of a change, so audit it first. The course's acceptance test — the
+five clauses — judges the loop as a whole, and Q2 closes with it (*Q2 ends with a verdict* in the
+repository README).
 
 1. **Audit the check suite.** Six checks run (`netops/verify.py` names them). For each, say in one
    sentence what class of defect it can catch and what it cannot. Then find at least two classes of
@@ -357,6 +361,7 @@ The **model weights** are not covered by the licenses above, and the two are not
 
 | Rev | Date | What changed |
 |---|---|---|
+| **r12** | 2026-09-27 | **Terms only — no requirement, command or number changed.** The lectures use *verifier* for anything that can reject an output and *checker* for a formal tool such as Batfish, and the course's *acceptance test* is the five clauses (Lens Guide, Tool 2). This brief had given that name to Batfish alone. **§1** now calls Batfish the acceptance test *of a change* and adds one sentence placing it in the lectures' terms: a checker, one kind of verifier, in a loop that stops at the pre-check. **Q2**'s opening line says the same and adds that Q2 closes with the five clauses, as the repository README asks (*Q2 ends with a verdict*). Extension C and the rest of the brief keep their wording. |
 | **r11** | 2026-09-23 | **Four fixes from the first run by someone other than the course staff** (a TA, on the shared server, from the published repository). Kit only except for §2. **§2** now shows the `git clone` and the path into the kit, and says to clone on the server (the repository link is on the LMS). **`setup.sh`** checks for `pycurl` even when `udocker` is already installed — on an account that had it, the image pull failed with "need curl or pycurl" and setup stopped there. **`loop.py`** wraps the loop in `try`/`finally`: on any failure the model server can produce — a timeout, an HTTP error — the run log is still written and the verifier's snapshots are still deleted. Both are yours to lose: the log is the only record of what that run did, and snapshots that are never removed accumulate in the verifier you go on using. This brief asks you to run settings that fail on purpose, so it is not a rare path. **`run_loop.py`** names the accepted configuration after the run log (`--out`) rather than after the intent, so two runs side by side — what Q1 asks for — no longer overwrite each other's result. Also, the smoke test now counts the untouched network's findings the way `run_loop.py` does, so the two no longer print different numbers for the same thing. No requirement, question or measurement changed. |
 | **r10** | 2026-09-21 | **Q1** opens with one sentence: say first whether this loop is one of the four wireless control problems or none of them, and if none, name the analog you would defend and the loop the work actually closes. **Q3**'s closing sentence now says that Gap 4 is where this brief lives and that the marks are for the boundary, the numbers and the evidence, not for naming the gap; arguing for another gap is still allowed. No requirement, command or number changed. |
 | **r9** | 2026-09-21 | **§7 only, license accuracy.** The two models were named on one line as carrying "its own terms", which flattened a real difference: gpt-oss is Apache-2.0 down to the weights, while Gemma is not an OSI open-source license at all but Google's own Terms of Use with a Prohibited Use Policy that follows the model. Q2.4 and extension B have you compare the two, so the distinction is one you meet in the work. No requirement, command or number changed. |
